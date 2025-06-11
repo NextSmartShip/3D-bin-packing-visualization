@@ -127,6 +127,18 @@
         #items-list::-webkit-scrollbar-thumb:hover {
             background: rgba(255, 255, 255, 0.5);
         }
+        
+        /* Hoverable item styles */
+        .hoverable-item {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .hoverable-item:hover {
+            background: rgba(255, 255, 255, 0.2) !important;
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
     </style>
 </head>
 <body>
@@ -273,6 +285,11 @@
         
         function setupScene(data) {
             console.log('Setting up 3D scene...');
+            
+            // Clear previous item meshes and animation states
+            itemMeshes = {};
+            highlightedItems.clear();
+            animationTargets = {};
             
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x1a1a1a);
@@ -566,6 +583,9 @@
                 side: THREE.DoubleSide  // 双面材质，确保内外面都可见
             });
             
+            // Add smooth transition properties
+            material.needsUpdate = true;
+            
             const mesh = new THREE.Mesh(geometry, material);
             
             // Support both uppercase and lowercase position field names
@@ -580,17 +600,29 @@
             );
             mesh.castShadow = true;
             mesh.receiveShadow = true;
-            mesh.userData = { item: item };
+            mesh.userData = { 
+                item: item,
+                originalColor: item.color,
+                originalOpacity: 0.8
+            };
+            
+            // Store mesh reference for highlighting
+            itemMeshes[item.id] = mesh;
+            
             scene.add(mesh);
             
             const edges = new THREE.EdgesGeometry(geometry);
             const wireframeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1 });
             const wireframe = new THREE.LineSegments(edges, wireframeMaterial);
             wireframe.position.copy(mesh.position);
+            wireframe.userData = { itemId: item.id }; // Store item ID for wireframe too
             scene.add(wireframe);
         }
         
         let isExpanded = false; // State for expand/collapse
+        let itemMeshes = {}; // Store 3D meshes by item ID for highlighting
+        let highlightedItems = new Set(); // Track currently highlighted items
+        let animationTargets = {}; // Store animation targets for smooth transitions
         
         function updateUI(data) {
             const statsHtml = `
@@ -609,7 +641,10 @@
                 const posZ = item.position.Z !== undefined ? item.position.Z : item.position.z;
                 
                 return `
-                    <div class="item-info" style="border-left: 4px solid ${item.color}">
+                    <div class="item-info hoverable-item" 
+                         style="border-left: 4px solid ${item.color}" 
+                         onmouseenter="highlightItem(${item.id})" 
+                         onmouseleave="unhighlightItem(${item.id})">
                         <strong>Item ${item.id}:</strong> ${item.dimensions.length}×${item.dimensions.width}×${item.dimensions.height}<br>
                         <small>Position: (${posX}, ${posY}, ${posZ})</small>
                     </div>
@@ -660,6 +695,89 @@
             }
         }
         
+        function highlightItem(itemId) {
+            const mesh = itemMeshes[itemId];
+            if (mesh && !highlightedItems.has(itemId)) {
+                highlightedItems.add(itemId);
+                
+                // Set animation targets for smooth transition
+                animationTargets[itemId] = {
+                    emissive: { r: 0.4, g: 0.4, b: 0.4 },
+                    opacity: 1.0,
+                    scale: 1.05
+                };
+                
+                // Make wireframe more prominent
+                scene.children.forEach(child => {
+                    if (child.userData && child.userData.itemId === itemId && child.type === 'LineSegments') {
+                        child.material.color = new THREE.Color(0xffffff);
+                        child.material.linewidth = 3;
+                    }
+                });
+            }
+        }
+        
+        function unhighlightItem(itemId) {
+            const mesh = itemMeshes[itemId];
+            if (mesh && highlightedItems.has(itemId)) {
+                highlightedItems.delete(itemId);
+                
+                // Set animation targets for smooth transition back
+                animationTargets[itemId] = {
+                    emissive: { r: 0, g: 0, b: 0 },
+                    opacity: mesh.userData.originalOpacity,
+                    scale: 1.0
+                };
+                
+                // Reset wireframe
+                scene.children.forEach(child => {
+                    if (child.userData && child.userData.itemId === itemId && child.type === 'LineSegments') {
+                        child.material.color = new THREE.Color(0x000000);
+                        child.material.linewidth = 1;
+                    }
+                });
+            }
+        }
+        
+        function updateHighlightAnimations() {
+            // Smoothly animate highlight effects
+            Object.keys(animationTargets).forEach(itemId => {
+                const mesh = itemMeshes[itemId];
+                const target = animationTargets[itemId];
+                
+                if (mesh && target) {
+                    const speed = 0.1; // Animation speed
+                    
+                    // Animate emissive color
+                    mesh.material.emissive.r += (target.emissive.r - mesh.material.emissive.r) * speed;
+                    mesh.material.emissive.g += (target.emissive.g - mesh.material.emissive.g) * speed;
+                    mesh.material.emissive.b += (target.emissive.b - mesh.material.emissive.b) * speed;
+                    
+                    // Animate opacity
+                    mesh.material.opacity += (target.opacity - mesh.material.opacity) * speed;
+                    
+                    // Animate scale
+                    const currentScale = mesh.scale.x;
+                    const newScale = currentScale + (target.scale - currentScale) * speed;
+                    mesh.scale.set(newScale, newScale, newScale);
+                    
+                    // Update wireframe scale
+                    scene.children.forEach(child => {
+                        if (child.userData && child.userData.itemId == itemId && child.type === 'LineSegments') {
+                            child.scale.set(newScale, newScale, newScale);
+                        }
+                    });
+                    
+                    // Remove target when animation is complete
+                    if (Math.abs(target.emissive.r - mesh.material.emissive.r) < 0.01 &&
+                        Math.abs(target.opacity - mesh.material.opacity) < 0.01 &&
+                        Math.abs(target.scale - currentScale) < 0.01) {
+                        delete animationTargets[itemId];
+                    }
+                }
+            });
+        }
+        
         function resetView() {
             targetX = 0;
             targetY = 0;
@@ -691,6 +809,9 @@
         
         function animate() {
             requestAnimationFrame(animate);
+            
+            // Update highlight animations
+            updateHighlightAnimations();
             
             // 更新相机位置
             updateCameraPosition();
