@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Bin Packing Visualization</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: white;
+            overflow: hidden;
+            /* 禁用文本选择和拖拽 */
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-user-drag: none;
+            -khtml-user-drag: none;
+            -moz-user-drag: none;
+            -o-user-drag: none;
+            user-drag: none;
+        }
+        
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        
+        #info-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 100;
+            max-width: 300px;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 100;
+        }
+        
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 18px;
+        }
+        
+        .stats-row {
+            margin: 5px 0;
+        }
+        
+        .control-button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            margin: 2px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .control-button:hover {
+            background: #45a049;
+        }
+        
+        .item-info {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="loading">Loading visualization...</div>
+        
+        <div id="info-panel" style="display: none;">
+            <h3>📦 Bin Packing Stats</h3>
+            <div id="stats"></div>
+            <h4>📋 Items</h4>
+            <div id="items-list"></div>
+        </div>
+        
+        <div id="controls" style="display: none;">
+            <h4>🎮 Controls</h4>
+            <button class="control-button" onclick="resetView()">Reset View</button>
+            <button class="control-button" onclick="toggleWireframe()">Toggle Wireframe</button>
+            <button class="control-button" onclick="toggleAxes()">Toggle Axes</button>
+            <div style="margin-top: 10px; font-size: 12px;">
+                • Left drag: Rotate<br>
+                • Middle drag: Pan<br>
+                • Mouse wheel: Zoom In/Out<br>
+                • Touch: Mobile support
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script>
+        let scene, camera, renderer;
+        let wireframeEnabled = false;
+        let axesHelper;
+        let mouseX = 0, mouseY = 0;
+        let isMouseDown = false;
+        let isMiddleMouseDown = false;
+        let isRightMouseDown = false;
+        let rightClickTimer = null;
+        let targetX = 0, targetY = 0;
+        let containerSize = 100;
+        let cameraDistance = 200; // 相机距离目标的距离
+        let minDistance = 50;     // 最小距离
+        let maxDistance = 1000;   // 最大距离
+        let panOffset = { x: 0, y: 0, z: 0 };  // 平移偏移量
+        let lookAtTarget = { x: 0, y: 0, z: 0 }; // 视线目标点
+        
+        // Sample data for testing if JSON fails to load
+        function getSampleData() {
+            return {
+                "container": {
+                    "length": 100,
+                    "width": 80,
+                    "height": 60
+                },
+                "items": [
+                    {
+                        "id": 1,
+                        "dimensions": { "length": 30, "width": 20, "height": 15 },
+                        "position": { "x": 0, "y": 0, "z": 0 },
+                        "color": "#ff6b6b"
+                    },
+                    {
+                        "id": 2,
+                        "dimensions": { "length": 25, "width": 25, "height": 20 },
+                        "position": { "x": 30, "y": 0, "z": 0 },
+                        "color": "#4ecdc4"
+                    },
+                    {
+                        "id": 3,
+                        "dimensions": { "length": 20, "width": 30, "height": 10 },
+                        "position": { "x": 0, "y": 20, "z": 0 },
+                        "color": "#45b7d1"
+                    }
+                ],
+                "stats": {
+                    "totalItems": 3,
+                    "containerVolume": 480000,
+                    "itemsVolume": 24000,
+                    "utilizationRate": 5.0
+                }
+            };
+        }
+        
+        async function init() {
+            console.log('Starting initialization...');
+            
+            // Check if Three.js loaded properly
+            if (typeof THREE === 'undefined') {
+                document.getElementById('loading').textContent = 'Failed to load Three.js library. Please check your internet connection.';
+                console.error('Three.js not loaded');
+                return;
+            }
+            console.log('Three.js loaded successfully');
+            
+            let data;
+            try {
+                console.log('Attempting to fetch bin_packing_3d.json...');
+                const response = await fetch('bin_packing_3d.json');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                data = await response.json();
+                console.log('Successfully loaded JSON data:', data);
+                document.getElementById('loading').style.display = 'none';
+            } catch (error) {
+                console.warn('Failed to load bin_packing_3d.json:', error.message);
+                console.log('Using sample data instead...');
+                data = getSampleData();
+                
+                // Update loading message
+                document.getElementById('loading').innerHTML = `
+                    <div style="color: orange;">⚠️ Could not load bin_packing_3d.json</div>
+                    <div style="font-size: 14px; margin-top: 5px;">Showing sample data instead</div>
+                `;
+                
+                setTimeout(() => {
+                    document.getElementById('loading').style.display = 'none';
+                }, 2000);
+            }
+            
+            try {
+                document.getElementById('info-panel').style.display = 'block';
+                document.getElementById('controls').style.display = 'block';
+                
+                setupScene(data);
+                setupMouseControls();
+                updateUI(data);
+                animate();
+                
+                console.log('Visualization setup complete');
+            } catch (error) {
+                console.error('Error setting up visualization:', error);
+                document.getElementById('loading').innerHTML = `
+                    <div style="color: red;">❌ Error setting up 3D scene</div>
+                    <div style="font-size: 12px; margin-top: 5px;">${error.message}</div>
+                `;
+            }
+        }
+        
+        function setupScene(data) {
+            console.log('Setting up 3D scene...');
+            
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            
+            // Remove existing canvas if any
+            const existingCanvas = document.querySelector('#container canvas');
+            if (existingCanvas) {
+                existingCanvas.remove();
+            }
+            
+            document.getElementById('container').appendChild(renderer.domElement);
+            
+            // 增强环境光，让所有面都有足够的照明
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.8);
+            scene.add(ambientLight);
+            
+            // 主光源
+            const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.6);
+            directionalLight1.position.set(50, 50, 50);
+            directionalLight1.castShadow = true;
+            scene.add(directionalLight1);
+            
+            // 添加背面光源，照亮阴影面
+            const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+            directionalLight2.position.set(-50, -50, -50);
+            scene.add(directionalLight2);
+            
+            // 添加侧面光源
+            const directionalLight3 = new THREE.DirectionalLight(0xffffff, 0.3);
+            directionalLight3.position.set(50, -50, 50);
+            scene.add(directionalLight3);
+            
+            // 添加另一侧面光源
+            const directionalLight4 = new THREE.DirectionalLight(0xffffff, 0.3);
+            directionalLight4.position.set(-50, 50, 50);
+            scene.add(directionalLight4);
+            
+            containerSize = Math.max(data.container.length, data.container.width, data.container.height);
+            axesHelper = new THREE.AxesHelper(containerSize * 0.6);
+            scene.add(axesHelper);
+            
+            createContainer(data.container);
+            data.items.forEach((item, index) => {
+                console.log(`Creating item ${index + 1}:`, item);
+                createItem(item);
+            });
+            
+            // Set initial camera position and distance
+            cameraDistance = containerSize * 2;
+            minDistance = containerSize * 0.5;
+            maxDistance = containerSize * 5;
+            
+            // 设置初始观察目标为容器中心
+            lookAtTarget.x = data.container.length / 2;
+            lookAtTarget.y = data.container.width / 2;
+            lookAtTarget.z = data.container.height / 2;
+            
+            updateCameraPosition();
+            
+            console.log('3D scene setup complete');
+        }
+        
+        function setupMouseControls() {
+            const canvas = renderer.domElement;
+            
+            canvas.addEventListener('mousedown', onMouseDown, false);
+            canvas.addEventListener('mousemove', onMouseMove, false);
+            canvas.addEventListener('mouseup', onMouseUp, false);
+            canvas.addEventListener('wheel', onMouseWheel, false);
+            
+            // 禁用中键的默认行为（比如在某些浏览器中打开链接）
+            canvas.addEventListener('auxclick', (event) => {
+                if (event.button === 1) event.preventDefault();
+            }, false);
+            
+            // 彻底禁用右键相关行为
+            canvas.addEventListener('contextmenu', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }, false);
+            
+            // 禁用拖拽开始事件（包括右键拖拽）
+            canvas.addEventListener('dragstart', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }, false);
+            
+            // 禁用选择文本
+            canvas.addEventListener('selectstart', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }, false);
+            
+            // 额外的右键长按保护
+            canvas.addEventListener('pointerdown', (event) => {
+                if (event.button === 2) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return false;
+                }
+            }, false);
+            
+            canvas.addEventListener('pointerup', (event) => {
+                if (event.button === 2) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return false;
+                }
+            }, false);
+            
+            // 禁用长按手势（主要针对移动设备）
+            canvas.addEventListener('touchstart', (event) => {
+                if (event.touches.length > 1) {
+                    event.preventDefault();
+                    return false;
+                }
+            }, { passive: false });
+            
+            canvas.addEventListener('gesturestart', (event) => {
+                event.preventDefault();
+                return false;
+            }, false);
+            
+            // Touch events for mobile
+            canvas.addEventListener('touchstart', onTouchStart, false);
+            canvas.addEventListener('touchmove', onTouchMove, false);
+            canvas.addEventListener('touchend', onTouchEnd, false);
+        }
+        
+        function onMouseDown(event) {
+            if (event.button === 0) { // 左键
+                isMouseDown = true;
+            } else if (event.button === 1) { // 中键
+                isMiddleMouseDown = true;
+                event.preventDefault(); // 防止默认的中键行为
+            } else if (event.button === 2) { // 右键
+                isRightMouseDown = true;
+                event.preventDefault(); // 禁用右键行为
+                event.stopPropagation();
+                
+                // 清除之前的定时器
+                if (rightClickTimer) {
+                    clearTimeout(rightClickTimer);
+                }
+                
+                // 设置长按检测定时器
+                rightClickTimer = setTimeout(() => {
+                    if (isRightMouseDown) {
+                        console.log('长按右键被阻止');
+                        // 强制触发mouseup来结束右键状态
+                        isRightMouseDown = false;
+                    }
+                }, 100); // 100ms后认为是长按
+                
+                return false;
+            }
+            mouseX = event.clientX;
+            mouseY = event.clientY;
+        }
+        
+        function onMouseMove(event) {
+            // 如果右键被按下，阻止所有移动行为
+            if (isRightMouseDown) {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }
+            
+            if (!isMouseDown && !isMiddleMouseDown) return;
+            
+            const deltaX = event.clientX - mouseX;
+            const deltaY = event.clientY - mouseY;
+            
+            if (isMouseDown) {
+                // 左键拖拽 - 旋转
+                targetX += deltaX * 0.01;
+                targetY += deltaY * 0.01;
+            } else if (isMiddleMouseDown) {
+                // 中键拖拽 - 平移
+                const panSpeed = cameraDistance * 0.001;
+                
+                // 计算相机的右方向和上方向向量
+                const rightVector = new THREE.Vector3();
+                const upVector = new THREE.Vector3();
+                
+                camera.getWorldDirection(new THREE.Vector3());
+                rightVector.setFromMatrixColumn(camera.matrixWorld, 0);
+                upVector.setFromMatrixColumn(camera.matrixWorld, 1);
+                
+                // 应用平移
+                panOffset.x -= rightVector.x * deltaX * panSpeed;
+                panOffset.y += upVector.y * deltaY * panSpeed;
+                panOffset.z -= rightVector.z * deltaX * panSpeed;
+                
+                // 更新观察目标点
+                lookAtTarget.x -= rightVector.x * deltaX * panSpeed;
+                lookAtTarget.y += upVector.y * deltaY * panSpeed;
+                lookAtTarget.z -= rightVector.z * deltaX * panSpeed;
+            }
+            
+            mouseX = event.clientX;
+            mouseY = event.clientY;
+        }
+        
+        function onMouseUp(event) {
+            if (event.button === 0) { // 左键
+                isMouseDown = false;
+            } else if (event.button === 1) { // 中键
+                isMiddleMouseDown = false;
+            } else if (event.button === 2) { // 右键
+                isRightMouseDown = false;
+                
+                // 清除长按定时器
+                if (rightClickTimer) {
+                    clearTimeout(rightClickTimer);
+                    rightClickTimer = null;
+                }
+                
+                event.preventDefault(); // 禁用右键行为
+                event.stopPropagation();
+                return false;
+            }
+        }
+        
+        function onMouseWheel(event) {
+            event.preventDefault();
+            
+            // 滚轮缩放，向上滚动缩小距离(放大)，向下滚动增加距离(缩小)
+            const zoomSpeed = 0.1;
+            const delta = event.deltaY > 0 ? 1 + zoomSpeed : 1 - zoomSpeed;
+            
+            cameraDistance *= delta;
+            
+            // 限制缩放范围
+            cameraDistance = Math.max(minDistance, Math.min(maxDistance, cameraDistance));
+            
+            console.log(`Camera distance: ${cameraDistance.toFixed(2)} (min: ${minDistance}, max: ${maxDistance})`);
+        }
+        
+        function onTouchStart(event) {
+            if (event.touches.length === 1) {
+                mouseX = event.touches[0].clientX;
+                mouseY = event.touches[0].clientY;
+                isMouseDown = true;
+            }
+        }
+        
+        function onTouchMove(event) {
+            if (event.touches.length === 1 && isMouseDown) {
+                const deltaX = event.touches[0].clientX - mouseX;
+                const deltaY = event.touches[0].clientY - mouseY;
+                
+                targetX += deltaX * 0.01;
+                targetY += deltaY * 0.01;
+                
+                mouseX = event.touches[0].clientX;
+                mouseY = event.touches[0].clientY;
+            }
+        }
+        
+        function onTouchEnd(event) {
+            isMouseDown = false;
+        }
+        
+        function createContainer(container) {
+            console.log('Creating container:', container);
+            const geometry = new THREE.BoxGeometry(container.length, container.width, container.height);
+            const edges = new THREE.EdgesGeometry(geometry);
+            const material = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+            const wireframe = new THREE.LineSegments(edges, material);
+            wireframe.position.set(container.length / 2, container.width / 2, container.height / 2);
+            scene.add(wireframe);
+        }
+        
+        function createItem(item) {
+            const geometry = new THREE.BoxGeometry(item.dimensions.length, item.dimensions.width, item.dimensions.height);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: item.color,
+                transparent: true,
+                opacity: 0.8,
+                side: THREE.DoubleSide  // 双面材质，确保内外面都可见
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            
+            // Support both uppercase and lowercase position field names
+            const posX = item.position.X !== undefined ? item.position.X : item.position.x;
+            const posY = item.position.Y !== undefined ? item.position.Y : item.position.y;
+            const posZ = item.position.Z !== undefined ? item.position.Z : item.position.z;
+            
+            mesh.position.set(
+                posX + item.dimensions.length / 2,
+                posY + item.dimensions.width / 2,
+                posZ + item.dimensions.height / 2
+            );
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.userData = { item: item };
+            scene.add(mesh);
+            
+            const edges = new THREE.EdgesGeometry(geometry);
+            const wireframeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1 });
+            const wireframe = new THREE.LineSegments(edges, wireframeMaterial);
+            wireframe.position.copy(mesh.position);
+            scene.add(wireframe);
+        }
+        
+        function updateUI(data) {
+            const statsHtml = `
+                <div class="stats-row"><strong>Items:</strong> ${data.stats.totalItems}</div>
+                <div class="stats-row"><strong>Container Volume:</strong> ${data.stats.containerVolume.toLocaleString()}</div>
+                <div class="stats-row"><strong>Items Volume:</strong> ${data.stats.itemsVolume.toLocaleString()}</div>
+                <div class="stats-row"><strong>Space Utilization:</strong> ${data.stats.utilizationRate.toFixed(2)}%</div>
+            `;
+            document.getElementById('stats').innerHTML = statsHtml;
+            
+            const itemsHtml = data.items.slice(0, 8).map(item => {
+                // Support both uppercase and lowercase position field names
+                const posX = item.position.X !== undefined ? item.position.X : item.position.x;
+                const posY = item.position.Y !== undefined ? item.position.Y : item.position.y;
+                const posZ = item.position.Z !== undefined ? item.position.Z : item.position.z;
+                
+                return `
+                    <div class="item-info" style="border-left: 4px solid ${item.color}">
+                        <strong>Item ${item.id}:</strong> ${item.dimensions.length}×${item.dimensions.width}×${item.dimensions.height}<br>
+                        <small>Position: (${posX}, ${posY}, ${posZ})</small>
+                    </div>
+                `;
+            }).join('');
+            document.getElementById('items-list').innerHTML = itemsHtml + 
+                (data.items.length > 8 ? `<div style='text-align: center; margin-top: 10px;'>... and ${data.items.length - 8} more items</div>` : '');
+        }
+        
+        function resetView() {
+            targetX = 0;
+            targetY = 0;
+            cameraDistance = containerSize * 2;
+            panOffset = { x: 0, y: 0, z: 0 };
+            lookAtTarget = { x: 0, y: 0, z: 0 };
+            updateCameraPosition();
+        }
+        
+        function toggleWireframe() {
+            wireframeEnabled = !wireframeEnabled;
+            scene.children.forEach(child => {
+                if (child.material && (child.material.type === 'MeshPhongMaterial' || child.material.type === 'MeshLambertMaterial')) {
+                    child.material.wireframe = wireframeEnabled;
+                }
+            });
+        }
+        
+        function toggleAxes() {
+            axesHelper.visible = !axesHelper.visible;
+        }
+        
+        function updateCameraPosition() {
+            // 基于球坐标系计算相机位置，加上平移偏移
+            camera.position.x = Math.cos(targetX) * Math.cos(targetY) * cameraDistance + panOffset.x;
+            camera.position.y = Math.sin(targetY) * cameraDistance + panOffset.y;
+            camera.position.z = Math.sin(targetX) * Math.cos(targetY) * cameraDistance + panOffset.z;
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 更新相机位置
+            updateCameraPosition();
+            camera.lookAt(lookAtTarget.x, lookAtTarget.y, lookAtTarget.z);
+            
+            renderer.render(scene, camera);
+        }
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Add error handling for window errors
+        window.addEventListener('error', (e) => {
+            console.error('JavaScript error:', e.error);
+            document.getElementById('loading').innerHTML = `
+                <div style="color: red;">❌ JavaScript Error</div>
+                <div style="font-size: 12px; margin-top: 5px;">${e.error.message}</div>
+            `;
+        });
+        
+        // 全局禁用右键菜单
+        document.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            return false;
+        }, false);
+        
+        // 全局禁用拖拽和选择
+        document.addEventListener('dragstart', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            return false;
+        }, false);
+        
+        document.addEventListener('selectstart', (event) => {
+            if (event.target.tagName !== 'INPUT' && event.target.tagName !== 'TEXTAREA') {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }
+        }, false);
+        
+        // 全局右键长按保护
+        document.addEventListener('mousedown', (event) => {
+            if (event.button === 2) {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }
+        }, true); // 使用捕获阶段
+        
+        document.addEventListener('mouseup', (event) => {
+            if (event.button === 2) {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }
+        }, true); // 使用捕获阶段
+        
+        // 禁用长按相关的事件
+        document.addEventListener('MSHoldVisual', (event) => {
+            event.preventDefault();
+            return false;
+        }, false);
+        
+        document.addEventListener('MSGestureHold', (event) => {
+            event.preventDefault();
+            return false;
+        }, false);
+        
+        init();
+    </script>
+</body>
+</html> 
