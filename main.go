@@ -30,12 +30,16 @@ func main() {
 			Qty:    1,
 		},
 		{
-			Length: 400,
+			Length: 40,
 			Width:  210,
 			Height: 80,
-			Qty:    2,
+			Qty:    12,
 		},
 	}
 	result := CanPack(container, items)
-	fmt.Println(result)
+	if result {
+		fmt.Println("The items can fit in the container.")
+	} else {
+		fmt.Println("The items cannot fit in the container.")
+	}
 }

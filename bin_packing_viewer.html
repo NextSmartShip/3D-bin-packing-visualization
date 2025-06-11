@@ -83,6 +83,50 @@
             border-radius: 4px;
             font-size: 12px;
         }
+        
+        #hidden-items {
+            animation: slideDown 0.3s ease-out;
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                max-height: 0;
+                overflow: hidden;
+            }
+            to {
+                opacity: 1;
+                max-height: 1000px;
+                overflow: visible;
+            }
+        }
+        
+        .expand-button {
+            transition: all 0.2s ease;
+        }
+        
+        .expand-button:hover {
+            transform: scale(1.05);
+        }
+        
+        /* Custom scrollbar styling */
+        #items-list::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        #items-list::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        
+        #items-list::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+        }
+        
+        #items-list::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -93,7 +137,7 @@
             <h3>📦 Bin Packing Stats</h3>
             <div id="stats"></div>
             <h4>📋 Items</h4>
-            <div id="items-list"></div>
+            <div id="items-list" style="max-height: 400px; overflow-y: auto; scrollbar-width: thin;"></div>
         </div>
         
         <div id="controls" style="display: none;">
@@ -206,6 +250,9 @@
             }
             
             try {
+                // Store data globally for toggle functionality
+                window.currentVisualizationData = data;
+                
                 document.getElementById('info-panel').style.display = 'block';
                 document.getElementById('controls').style.display = 'block';
                 
@@ -543,6 +590,8 @@
             scene.add(wireframe);
         }
         
+        let isExpanded = false; // State for expand/collapse
+        
         function updateUI(data) {
             const statsHtml = `
                 <div class="stats-row"><strong>Items:</strong> ${data.stats.totalItems}</div>
@@ -552,7 +601,8 @@
             `;
             document.getElementById('stats').innerHTML = statsHtml;
             
-            const itemsHtml = data.items.slice(0, 8).map(item => {
+            // Generate HTML for all items
+            const generateItemHTML = (item) => {
                 // Support both uppercase and lowercase position field names
                 const posX = item.position.X !== undefined ? item.position.X : item.position.x;
                 const posY = item.position.Y !== undefined ? item.position.Y : item.position.y;
@@ -564,9 +614,50 @@
                         <small>Position: (${posX}, ${posY}, ${posZ})</small>
                     </div>
                 `;
-            }).join('');
-            document.getElementById('items-list').innerHTML = itemsHtml + 
-                (data.items.length > 8 ? `<div style='text-align: center; margin-top: 10px;'>... and ${data.items.length - 8} more items</div>` : '');
+            };
+            
+            let itemsHtml = '';
+            
+            if (data.items.length <= 8) {
+                // Show all items if 8 or fewer
+                itemsHtml = data.items.map(generateItemHTML).join('');
+            } else {
+                // Show first 8 items
+                const visibleItems = data.items.slice(0, 8).map(generateItemHTML).join('');
+                
+                // Show hidden items if expanded
+                const hiddenItems = isExpanded ? 
+                    data.items.slice(8).map(generateItemHTML).join('') : '';
+                
+                // Create expand/collapse button
+                const remainingCount = data.items.length - 8;
+                const buttonText = isExpanded ? 
+                    `▲ Show Less` : 
+                    `▼ Show ${remainingCount} More Items`;
+                
+                const expandButton = `
+                    <div style="text-align: center; margin-top: 10px;">
+                        <button class="control-button expand-button" onclick="toggleItemsList()" style="font-size: 11px; padding: 6px 12px;">
+                            ${buttonText}
+                        </button>
+                    </div>
+                `;
+                
+                itemsHtml = visibleItems + 
+                    (isExpanded ? `<div id="hidden-items">${hiddenItems}</div>` : '') + 
+                    expandButton;
+            }
+            
+            document.getElementById('items-list').innerHTML = itemsHtml;
+        }
+        
+        function toggleItemsList() {
+            isExpanded = !isExpanded;
+            // Re-run updateUI with current data to refresh the display  
+            const currentData = window.currentVisualizationData;
+            if (currentData) {
+                updateUI(currentData);
+            }
         }
         
         function resetView() {
